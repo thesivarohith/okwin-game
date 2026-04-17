@@ -1,0 +1,39 @@
+# Log files
+*.log
+backend/server.log
+
+# Data files (keep the structure, exclude the large data)
+data/*.csv
+data/*.json
+!data/.gitkeep
+*.json
+!package.json
+!feature_columns.json
+
+# Model files
+model/*.pkl
+model/*.keras
+model/*.h5
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+virenv/
+.env
+
+# Frontend
+node_modules/
+dist/
+.DS_Store
+
+# Temporary artifacts
+/scripts/console_scraper.js
+/scripts/auto_capture_scraper.js
+/scripts/dom_scraper.js
+/scripts/header_logger.js
+/scripts/click_along_scraper.js
+/scripts/ultimate_scraper*.js
+/scripts/sign_finder.js
+/scripts/token_helper.js
+/scripts/robust_scraper.js

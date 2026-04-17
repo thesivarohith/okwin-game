@@ -1,0 +1,33 @@
+============================================================
+  OkWin Big/Small Predictor — Evaluation Report
+============================================================
+
+Test samples: 295
+Ensemble weights: XGBoost=0.5, LSTM=0.3, Markov=0.2
+
+--- Individual Model Accuracy ---
+  XGBoost:      0.5119
+  Bi-LSTM:      0.5051
+  Markov Chain: 0.5085
+
+--- Ensemble Accuracy: 0.5119 ---
+
+--- Ensemble Classification Report ---
+              precision    recall  f1-score   support
+
+       Small       0.51      0.44      0.47       146
+         Big       0.51      0.58      0.55       149
+
+    accuracy                           0.51       295
+   macro avg       0.51      0.51      0.51       295
+weighted avg       0.51      0.51      0.51       295
+
+--- Confusion Matrix (Ensemble) ---
+[[64 82]
+ [62 87]]
+
+--- Average Prediction Confidence ---
+  Mean max probability: 0.5716
+  Predictions above 60% confidence: 84 / 295
+
+============================================================
