@@ -1,203 +1,148 @@
-"""
-Step 2: Feature engineering for Big/Small prediction.
-Input:  data/clean_data.csv
-Output: data/features.csv
-"""
 import pandas as pd
 import numpy as np
 import os
-import sys
+import json
+import warnings
+warnings.filterwarnings('ignore')
 
-# --- Configuration ---
-CLEAN_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'clean_data.csv')
-OUT_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'features.csv')
+from preprocess import load_clean_data
+from mining import run_all_mining
 
-# Lookback windows
-HISTORY_DEPTH = 10       # last N results/sizes/colors
-SHORT_WINDOW = 10
-MID_WINDOW = 20
-LONG_WINDOW = 50
-MIN_ROWS_NEEDED = LONG_WINDOW  # skip first N rows (not enough history)
+PROCESSED_DIR = os.path.join(os.path.dirname(__file__), '..', 'data', 'processed')
+SAVED_DIR = os.path.join(os.path.dirname(__file__), '..', 'model', 'saved')
+FEATURES_CSV_PATH = os.path.join(PROCESSED_DIR, 'features.csv')
+FEATURE_COLS_PATH = os.path.join(os.path.dirname(__file__), '..', 'model', 'feature_columns.json')
 
-
-def add_recent_history(df):
-    """Last N result values, size values, and color values as features."""
-    for i in range(1, HISTORY_DEPTH + 1):
+def build_features():
+    df = load_clean_data()
+    
+    # Run Layer 0 Data Mining (returns df with new cols)
+    df = run_all_mining(df)
+    
+    # Core feature engineering
+    # === LAG FEATURES ===
+    for i in range(1, 11):
         df[f'last_{i}_result'] = df['result'].shift(i)
-        df[f'last_{i}_size'] = df['target'].shift(i)
-    for i in range(1, 6):  # only 5 for color
-        df[f'last_{i}_color'] = df['color_encoded'].shift(i)
-    return df
-
-
-def add_streak_features(df):
-    """Current streak length and type (Big=1, Small=0)."""
-    targets = df['target'].values
-    streak_lengths = np.zeros(len(targets), dtype=int)
-    streak_types = np.zeros(len(targets), dtype=int)
-
-    for i in range(1, len(targets)):
-        if targets[i - 1] == targets[i - 2] if i >= 2 else True:
-            # Count backwards from i-1
-            count = 1
-            val = targets[i - 1]
-            j = i - 2
-            while j >= 0 and targets[j] == val:
+        df[f'last_{i}_size'] = df['size_binary'].shift(i)
+        
+    for i in range(1, 6):
+        df[f'last_{i}_color'] = df['color_enc'].shift(i)
+        
+    # === STREAK FEATURES ===
+    streak_length = np.zeros(len(df))
+    streak_type = np.zeros(len(df))
+    big_streak = np.zeros(len(df))
+    small_streak = np.zeros(len(df))
+    
+    s_vals = df['size_binary'].values
+    # Note: we need streak ending at i-1 to avoid data leakage for prediction target i
+    for i in range(1, len(df)):
+        # Check consecutive identical values backwards starting from i-1
+        count = 1
+        stype = s_vals[i-1]
+        for j in range(i-2, -1, -1):
+            if s_vals[j] == stype:
                 count += 1
-                j -= 1
-            streak_lengths[i] = count
-            streak_types[i] = val
+            else:
+                break
+        streak_length[i] = count
+        streak_type[i] = stype
+        if stype == 1:
+            big_streak[i] = count
+            small_streak[i] = 0
         else:
-            streak_lengths[i] = 1
-            streak_types[i] = targets[i - 1]
-
-    df['streak_length'] = streak_lengths
-    df['streak_type'] = streak_types
-    return df
-
-
-def add_frequency_features(df):
-    """Big/Small frequency counts over short/mid/long windows."""
-    for window, label in [(SHORT_WINDOW, 'short'), (MID_WINDOW, 'mid'), (LONG_WINDOW, 'long')]:
-        df[f'big_count_{label}'] = df['target'].rolling(window=window, min_periods=1).sum().shift(1)
-        df[f'small_count_{label}'] = window - df[f'big_count_{label}']
-        df[f'big_ratio_{label}'] = df[f'big_count_{label}'] / window
-    return df
-
-
-def add_transition_features(df):
-    """Last 2 and 3 size combo encodings."""
-    # Last 2 combo: 4 possibilities (BB=0, BS=1, SB=2, SS=3)
-    t = df['target'].values
-    last2 = np.full(len(t), -1, dtype=int)
-    last3 = np.full(len(t), -1, dtype=int)
-
-    for i in range(2, len(t)):
-        last2[i] = t[i - 2] * 2 + t[i - 1]
-    for i in range(3, len(t)):
-        last3[i] = t[i - 3] * 4 + t[i - 2] * 2 + t[i - 1]
-
-    df['last_2_combo'] = last2
-    df['last_3_combo'] = last3
-    return df
-
-
-def add_gap_features(df):
-    """Rounds since last Big and last Small."""
-    targets = df['target'].values
-    gap_big = np.zeros(len(targets), dtype=int)
-    gap_small = np.zeros(len(targets), dtype=int)
-
-    last_big = -1
-    last_small = -1
-
-    for i in range(len(targets)):
-        if i > 0:
-            gap_big[i] = (i - last_big) if last_big >= 0 else i
-            gap_small[i] = (i - last_small) if last_small >= 0 else i
-        if targets[i] == 1:
-            last_big = i
+            big_streak[i] = 0
+            small_streak[i] = count
+            
+    # If no history yet
+    streak_length[0] = 0
+    streak_type[0] = -1
+    
+    df['streak_length'] = streak_length
+    df['streak_type'] = streak_type
+    df['big_streak'] = big_streak
+    df['small_streak'] = small_streak
+    
+    # === FREQUENCY FEATURES ===
+    for w, name in [(10, 'short'), (20, 'mid'), (50, 'long')]:
+        # Using shift(1) to avoid data leakage
+        shifted_size = df['size_binary'].shift(1)
+        df[f'big_count_{name}'] = shifted_size.rolling(w, min_periods=1).sum()
+        df[f'small_count_{name}'] = shifted_size.rolling(w, min_periods=1).count() - df[f'big_count_{name}']
+        df[f'big_ratio_{name}'] = df[f'big_count_{name}'] / w
+        
+    # === RESULT NUMBER FEATURES ===
+    shifted_result = df['result'].shift(1)
+    df['result_mean_5'] = shifted_result.rolling(5, min_periods=1).mean()
+    df['result_mean_10'] = shifted_result.rolling(10, min_periods=1).mean()
+    df['result_std_5'] = shifted_result.rolling(5, min_periods=1).std()
+    df['result_std_10'] = shifted_result.rolling(10, min_periods=1).std()
+    df['result_median_10'] = shifted_result.rolling(10, min_periods=1).median()
+    df['number_trend'] = shifted_result - df['result'].shift(5)
+    
+    # === TRANSITION FEATURES ===
+    df['last_2_combo'] = df['last_2_size'] * 2 + df['last_1_size']
+    df['last_3_combo'] = df['last_3_size'] * 4 + df['last_2_size'] * 2 + df['last_1_size']
+    
+    # === GAP FEATURES ===
+    gap_big = np.zeros(len(df))
+    gap_small = np.zeros(len(df))
+    for i in range(1, len(df)):
+        if s_vals[i-1] == 1:
+            gap_big[i] = 0
+            gap_small[i] = gap_small[i-1] + 1
         else:
-            last_small = i
-
+            gap_small[i] = 0
+            gap_big[i] = gap_big[i-1] + 1
     df['gap_since_big'] = gap_big
     df['gap_since_small'] = gap_small
-    return df
-
-
-def add_cyclical_features(df):
-    """Period-based modulo features to detect algorithmic cycles."""
-    # Convert period to numeric, coercion will turn 'SYNTH_0' to NaN
-    # We'll use the index + some offset as a fallback for synthetic periods
-    p_numeric = pd.to_numeric(df['period'], errors='coerce')
-    is_synth = p_numeric.isna()
     
-    # For real periods, use the last few digits to avoid overflow issues
-    # For synthetic, use the index
-    period_val = p_numeric.fillna(0).astype(np.int64) % 1000000
-    synth_val = df.index.to_series()
-    
+    # === CYCLICAL FEATURES ===
     for mod in [3, 5, 10, 20]:
-        df[f'period_mod_{mod}'] = np.where(is_synth, synth_val % mod, period_val % mod)
-    return df
+        df[f'period_mod_{mod}'] = df['period'] % mod
+        
+    # === PATTERN FLAGS ===
+    df['is_alternating'] = 0
+    df['is_repeating'] = 0
+    
+    for i in range(4, len(df)):
+        l1, l2, l3, l4 = s_vals[i-1], s_vals[i-2], s_vals[i-3], s_vals[i-4]
+        if l1 != l2 and l2 != l3 and l3 != l4:
+            df.loc[i, 'is_alternating'] = 1
+            
+    for i in range(3, len(df)):
+        l1, l2, l3 = s_vals[i-1], s_vals[i-2], s_vals[i-3]
+        if l1 == l2 == l3:
+            df.loc[i, 'is_repeating'] = 1
+            
+    df['dominant_last10'] = (df['big_count_short'] >= 5).astype(int)
+    
+    # TARGET
+    # The target is df['size_binary'] at index i (automatically set by definition).
+    # All features are computed looking at i-k, so we predict y[i] from row i's features.
+    
+    # Drop first 50 rows
+    df = df.iloc[50:]
+    df = df.fillna(0)
+    
+    # Feature columns exclusion (don't train on timestamp, period, result, size, color, size_binary which is target)
+    exclude_cols = ['timestamp', 'period', 'result', 'size', 'color', 'size_binary']
+    feature_cols = [c for c in df.columns if c not in exclude_cols]
+    
+    X = df[feature_cols]
+    y = df['size_binary']
+    
+    os.makedirs(PROCESSED_DIR, exist_ok=True)
+    df.to_csv(FEATURES_CSV_PATH, index=False)
+    
+    os.makedirs(os.path.dirname(FEATURE_COLS_PATH), exist_ok=True)
+    with open(FEATURE_COLS_PATH, 'w') as f:
+        json.dump(feature_cols, f)
+        
+    print(f"Total features: {len(feature_cols)}, Total rows: {len(df)}")
+    print(f"NaN count: {df.isna().sum().sum()}")
+    
+    return X, y
 
-
-def add_pattern_flags(df):
-    """Meta-pattern detection flags."""
-    t = df['target'].values
-
-    # Is alternating (last 4: BSBS or SBSB)
-    is_alt = np.zeros(len(t), dtype=int)
-    for i in range(4, len(t)):
-        if (t[i-1] != t[i-2]) and (t[i-2] != t[i-3]) and (t[i-3] != t[i-4]):
-            is_alt[i] = 1
-    df['is_alternating'] = is_alt
-
-    # Is repeating (last 3 same)
-    is_rep = np.zeros(len(t), dtype=int)
-    for i in range(3, len(t)):
-        if t[i-1] == t[i-2] == t[i-3]:
-            is_rep[i] = 1
-    df['is_repeating'] = is_rep
-
-    # Dominant in last 10
-    df['dominant_last10'] = (df['target'].rolling(10, min_periods=1).sum().shift(1) >= 6).astype(int)
-
-    return df
-
-
-def add_result_stats(df):
-    """Statistical features from the raw result values."""
-    for w in [5, 10]:
-        df[f'result_mean_{w}'] = df['result'].rolling(window=w, min_periods=1).mean().shift(1)
-        df[f'result_std_{w}'] = df['result'].rolling(window=w, min_periods=1).std().shift(1).fillna(0)
-        df[f'result_median_{w}'] = df['result'].rolling(window=w, min_periods=1).median().shift(1)
-    return df
-
-
-def main():
-    if not os.path.exists(CLEAN_PATH):
-        print(f"ERROR: {CLEAN_PATH} not found. Run preprocess.py first.")
-        sys.exit(1)
-
-    print(f"Loading: {CLEAN_PATH}")
-    df = pd.read_csv(CLEAN_PATH)
-    print(f"  Rows: {len(df)}")
-
-    # Add all feature groups
-    print("Engineering features...")
-    df = add_recent_history(df)
-    df = add_streak_features(df)
-    df = add_frequency_features(df)
-    df = add_transition_features(df)
-    df = add_gap_features(df)
-    df = add_cyclical_features(df)
-    df = add_pattern_flags(df)
-    df = add_result_stats(df)
-
-    # Drop rows without enough history
-    before = len(df)
-    df = df.iloc[MIN_ROWS_NEEDED:].reset_index(drop=True)
-    print(f"  Dropped first {MIN_ROWS_NEEDED} rows (insufficient history)")
-    print(f"  Remaining rows: {len(df)}")
-
-    # Fill any remaining NaN with 0
-    nan_count = df.isna().sum().sum()
-    if nan_count > 0:
-        print(f"  Filling {nan_count} remaining NaN values with 0")
-        df = df.fillna(0)
-
-    # Save
-    os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
-    df.to_csv(OUT_PATH, index=False)
-
-    # Report
-    feature_cols = [c for c in df.columns if c not in ['timestamp', 'period', 'result', 'size', 'color', 'color_encoded', 'target']]
-    print(f"\nSaved: {OUT_PATH}")
-    print(f"  Total features: {len(feature_cols)}")
-    print(f"  Feature names: {feature_cols}")
-    print(f"  Target distribution: {df['target'].value_counts().to_dict()}")
-
-
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    build_features()

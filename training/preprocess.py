@@ -1,88 +1,62 @@
-"""
-Step 1: Load raw CSV, clean data, encode target.
-Input:  data/raw_data.csv (or any CSV with: timestamp, period, result, size, color)
-Output: data/clean_data.csv
-"""
 import pandas as pd
-import numpy as np
 import os
-import sys
 
-# --- Configuration ---
-RAW_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'augmented_15k.csv')
-OUT_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'clean_data.csv')
+DATASET_PATH = os.path.join(os.path.dirname(__file__), '..', 'okwin_30s_dataset.csv')
+CLEAN_DATA_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'processed', 'clean_data.csv')
 
-
-def load_and_clean(path):
-    """Load CSV and perform basic cleaning."""
-    print(f"Loading: {path}")
-    df = pd.read_csv(path)
-
-    # Strip whitespace from column names and string values
-    df.columns = df.columns.str.strip()
-    for col in df.select_dtypes(include='object').columns:
-        df[col] = df[col].str.strip()
-
-    print(f"  Raw rows: {len(df)}")
-
-    # Drop rows with missing critical values
-    critical_cols = ['period', 'result', 'size', 'color']
-    before = len(df)
-    df.dropna(subset=critical_cols, inplace=True)
-    dropped = before - len(df)
-    if dropped > 0:
-        print(f"  Dropped {dropped} rows with missing values")
-
-    # Ensure result is integer
+def load_clean_data() -> pd.DataFrame:
+    if not os.path.exists(DATASET_PATH):
+        raise FileNotFoundError(f"Dataset not found at {DATASET_PATH}")
+        
+    df = pd.read_csv(DATASET_PATH)
+    
+    # Cleaning
+    # 1. Sort ascending by period
+    df = df.sort_values(by='period', ascending=True)
+    
+    # 2. Remove duplicate periods
+    df = df.drop_duplicates(subset=['period'], keep='first')
+    
+    # 3. Normalize size column & drop invalid
+    df = df[df['size'].isin(['Big', 'Small'])]
+    
+    # 4. Normalize color
+    df['color'] = df['color'].replace({'Red+Violet': 'Violet', 'Green+Violet': 'Violet'})
+    
+    # 5. Normalize result (0-9)
+    # Ensure it's integer and valid
+    df['result'] = pd.to_numeric(df['result'], errors='coerce')
+    df = df.dropna(subset=['result'])
     df['result'] = df['result'].astype(int)
-
-    # Sort by period (chronological)
-    df.sort_values('period', inplace=True)
-    df.reset_index(drop=True, inplace=True)
-
-    return df
-
-
-def encode(df):
-    """Encode target and categorical columns."""
-    # Target: size → binary (Big=1, Small=0)
-    df['target'] = (df['size'] == 'Big').astype(int)
-
-    # Color encoding
-    color_map = {
-        'Red': 0, 'Green': 1, 'Violet': 2,
-        'Green+Violet': 3, 'Red+Violet': 4
-    }
-    df['color_encoded'] = df['color'].map(color_map)
-
-    # Handle unmapped colors
-    unmapped = df['color_encoded'].isna().sum()
-    if unmapped > 0:
-        print(f"  WARNING: {unmapped} unmapped color values, filling with -1")
-        df['color_encoded'] = df['color_encoded'].fillna(-1).astype(int)
-    else:
-        df['color_encoded'] = df['color_encoded'].astype(int)
-
-    return df
-
-
-def main():
-    if not os.path.exists(RAW_PATH):
-        print(f"ERROR: {RAW_PATH} not found.")
-        print("Place your CSV in data/raw_data.csv or run generate_synthetic.py first.")
-        sys.exit(1)
-
-    df = load_and_clean(RAW_PATH)
-    df = encode(df)
-
+    df = df[df['result'].between(0, 9)]
+    
+    # Reset index
+    df = df.reset_index(drop=True)
+    
+    # Encoding
+    df['size_binary'] = df['size'].map({'Big': 1, 'Small': 0})
+    df['color_enc'] = df['color'].map({'Red': 0, 'Green': 1, 'Violet': 2})
+    
+    # Print metrics
+    total_rows = len(df)
+    big_count = df['size_binary'].sum()
+    small_count = total_rows - big_count
+    
+    big_pct = (big_count / total_rows * 100) if total_rows > 0 else 0
+    small_pct = (small_count / total_rows * 100) if total_rows > 0 else 0
+    
+    first_ts = df['timestamp'].iloc[0] if total_rows > 0 else "N/A"
+    last_ts = df['timestamp'].iloc[-1] if total_rows > 0 else "N/A"
+    
+    print(f"Total rows after cleaning: {total_rows}")
+    print(f"Big count: {big_count} ({big_pct:.2f}%) / Small count: {small_count} ({small_pct:.2f}%)")
+    print(f"Date range: {first_ts} to {last_ts}")
+    
     # Save
-    os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
-    df.to_csv(OUT_PATH, index=False)
-    print(f"\nSaved: {OUT_PATH}")
-    print(f"  Total rows: {len(df)}")
-    print(f"  Target distribution: {df['target'].value_counts().to_dict()} (1=Big, 0=Small)")
-    print(f"  Columns: {list(df.columns)}")
+    os.makedirs(os.path.dirname(CLEAN_DATA_PATH), exist_ok=True)
+    df.to_csv(CLEAN_DATA_PATH, index=False)
+    
+    return df
 
-
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    load_clean_data()

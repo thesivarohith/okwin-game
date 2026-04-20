@@ -1,0 +1,36 @@
+name: OkWin 24/7 Cloud Scraper
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # Run every 5 minutes to stay within the 10-item limit
+  workflow_dispatch:      # Allow manual trigger
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas
+
+      - name: Run Collector (One-Shot)
+        run: python scripts/persistence_collector.py --one-shot
+
+      - name: Commit and Push Changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add okwin_30s_dataset.csv
+          git commit -m "Auto-update dataset: $(date +'%Y-%m-%d %H:%M')" || echo "No changes to commit"
+          git push
