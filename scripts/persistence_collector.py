@@ -13,12 +13,14 @@ DATASET_PATH = os.path.join(os.path.dirname(__file__), "..", "okwin_30s_dataset.
 POLL_INTERVAL = 30  # Used only in loop mode
 
 def get_latest_rounds(page_no=1):
-    # This public endpoint NO LONGER requires a TOKEN!
     url = "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             return response.json().get("data", {}).get("list", [])
+        else:
+            print(f"API Error: {response.status_code}")
     except Exception as e:
         print(f"[{datetime.now().strftime('%H:%M:%S')}] API Error: {e}")
     return []
