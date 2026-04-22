@@ -8,46 +8,48 @@ from datetime import datetime
 
 # CONFIG
 DATASET_PATH = os.path.join(os.path.dirname(__file__), "..", "okwin_30s_dataset.csv")
-# CONFIG
-DATASET_PATH = os.path.join(os.path.dirname(__file__), "..", "okwin_30s_dataset.csv")
-POLL_INTERVAL = 30  # Used only in loop mode
 
-def get_latest_rounds(page_no=1):
+def get_latest_rounds(page_no=1, retries=3):
     url = "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            return response.json().get("data", {}).get("list", [])
-        else:
-            print(f"API Error: {response.status_code}")
-    except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] API Error: {e}")
+    
+    for attempt in range(retries):
+        try:
+            # Note: Public API might ignore page_no, but we send it just in case
+            response = requests.get(url, headers=headers, timeout=15)
+            if response.status_code == 200:
+                return response.json().get("data", {}).get("list", [])
+            else:
+                print(f"API Error ({response.status_code}) on attempt {attempt+1}")
+        except Exception as e:
+            print(f"Attempt {attempt+1} failed: {e}")
+        
+        if attempt < retries - 1:
+            time.sleep(2 * (attempt + 1)) # Exponential backoff
     return []
 
 def run_collector(one_shot=False):
-    print("══ OkWin Persistent Collector ══")
+    print("══ OkWin Persistent Collector v3 ══")
     print(f"Mode: {'One-Shot' if one_shot else 'Looping'}")
-    print(f"Recording to: {DATASET_PATH}")
     
-    # Load existing periods to avoid duplicates
+    # Load existing periods
     existing_periods = set()
     if os.path.exists(DATASET_PATH):
         try:
             df = pd.read_csv(DATASET_PATH)
             existing_periods = set(df['period'].astype(str).tolist())
-        except:
-            pass
+        except: pass
 
-    max_pages = 10 if one_shot else 1 # Fetch more if one-shot to catch up on 30m gap
+    # In one-shot mode, we fetch until we hit existing data (max 1000 pages / 10k rounds)
+    fetch_limit = 1000 if one_shot else 1 
     
     while True:
         new_entries = []
-        for p in range(1, max_pages + 1):
-            # We need to pass pageNo to get_latest_rounds
-            # Let's quickly modify get_latest_rounds to accept pageNo
+        for p in range(1, fetch_limit + 1):
             rounds = get_latest_rounds(page_no=p)
-            found_new_on_page = False
+            if not rounds: break # API failure
+            
+            found_new = False
             for r in rounds:
                 pid = str(r.get("issueNumber"))
                 if pid not in existing_periods:
@@ -58,10 +60,11 @@ def run_collector(one_shot=False):
                     color_val = colors.get(num, "Unknown")
                     new_entries.append([datetime.now().isoformat(), pid, num, size, color_val])
                     existing_periods.add(pid)
-                    found_new_on_page = True
+                    found_new = True
             
-            if not found_new_on_page and p > 1: # If p1 has nothing new, p2 won't either
-                break
+            print(f"Page {p}: Found {sum(1 for e in new_entries if e[1] in [str(r.get('issueNumber')) for r in rounds])} new rounds")
+            
+            if not found_new: break # Linking successful! 
         
         if new_entries:
             new_entries.sort(key=lambda x: x[1])
@@ -69,16 +72,11 @@ def run_collector(one_shot=False):
                 writer = csv.writer(f)
                 for entry in new_entries:
                     writer.writerow(entry)
-            
-            total_count = len(existing_periods)
-            percent = (total_count / 20000) * 100
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] +{len(new_entries)} Rows | Total: {total_count:,} ({percent:.1f}%)")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] +{len(new_entries)} New Rounds | Total: {len(existing_periods):,}")
 
-        if one_shot:
-            break
-        time.sleep(POLL_INTERVAL)
+        if one_shot: break
+        time.sleep(30)
 
 if __name__ == "__main__":
     import sys
-    is_oneshot = "--one-shot" in sys.argv
-    run_collector(one_shot=is_oneshot)
+    run_collector(one_shot="--one-shot" in sys.argv)
