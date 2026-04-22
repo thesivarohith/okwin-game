@@ -74,6 +74,14 @@ def run_collector(one_shot=False):
                     writer.writerow(entry)
             print(f"[{datetime.now().strftime('%H:%M:%S')}] +{len(new_entries)} New Rounds | Total: {len(existing_periods):,}")
 
+        # Update health check
+        with open(os.path.join(os.path.dirname(DATASET_PATH), "scraper_status.json"), "w") as f:
+            json.dump({
+                "last_run": datetime.now().isoformat(),
+                "total_rows": len(existing_periods),
+                "status": "active"
+            }, f)
+
         if one_shot: break
         time.sleep(30)
 
