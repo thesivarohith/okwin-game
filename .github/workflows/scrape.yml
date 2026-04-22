@@ -33,7 +33,8 @@ jobs:
           git config --local user.name "github-actions[bot]"
           echo "Current Status:"
           git status
-          git add okwin_30s_dataset.csv scraper_status.json
+          git add okwin_30s_dataset.csv
+          git add --force scraper_status.json
           if git diff --staged --quiet; then
             echo "No changes found in dataset. Skipping commit."
           else

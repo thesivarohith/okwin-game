@@ -9,6 +9,7 @@ data/*.json
 *.json
 !package.json
 !feature_columns.json
+!scraper_status.json
 
 # Model files
 model/*.pkl
