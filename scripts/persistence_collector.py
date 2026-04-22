@@ -8,10 +8,17 @@ from datetime import datetime
 
 # CONFIG
 DATASET_PATH = os.path.join(os.path.dirname(__file__), "..", "okwin_30s_dataset.csv")
+print(f"DEBUG: Dataset path resolved to: {os.path.abspath(DATASET_PATH)}")
 
-def get_latest_rounds(page_no=1, retries=3):
+def get_latest_rounds(page_no=1, retries=5):
+    # Using the current public endpoint
     url = "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Accept": "application/json"
+    }
+    
+    print(f"DEBUG: Fetching page {page_no} from {url}...")
     
     for attempt in range(retries):
         try:

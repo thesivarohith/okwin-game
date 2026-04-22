@@ -31,12 +31,17 @@ jobs:
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
+          echo "Current Status:"
           git status
           git add okwin_30s_dataset.csv scraper_status.json
           if git diff --staged --quiet; then
             echo "No changes found in dataset. Skipping commit."
           else
+            echo "Changes detected! Committing..."
             git commit -m "Auto-update dataset: $(date +'%Y-%m-%d %H:%M')"
+            echo "Pulling latest changes..."
             git pull --rebase origin main
+            echo "Pushing to GitHub..."
             git push origin main
           fi
+          echo "Process finished."
